@@ -462,6 +462,100 @@ reports the physical matrix cell and distinguishes a mis-mapped key from genuine
 row/column crosstalk. Suspected "ghost" keypresses are worth measuring before
 assuming debounce.
 
+### Input routing: three paths, and X's 255-keycode ceiling
+
+This cost hours, so: **X11 core keycodes are limited to 8–255.** Evdev X keycodes
+are kernel code + 8, so anything above kernel 247 is invisible to X. On this
+keypad that silently kills four keys:
+
+| key | kernel | X keycode | reachable from X? |
+| --- | --- | --- | --- |
+| `KEY_PICKUP_PHONE` | 445 | 453 | **no** |
+| `KEY_HANGUP_PHONE` | 446 | 454 | **no** |
+| `KEY_KBD_LCD_MENU1` | 696 | 704 | **no** |
+| `KEY_KBD_LCD_MENU2` | 697 | 705 | **no** |
+
+`xmodmap -pke` ends at `keycode 255 = XF86RFKill`. Any dwm `keys[]` binding on
+`XF86XK_HangupPhone` or `XF86XK_PickupPhone` is therefore **dead code** — and
+several such bindings ship in `config.def.h`, which is misleading.
+
+There are three separate input paths, and knowing which one a key takes is the
+difference between a five-line change and an impossible one:
+
+1. **Keycode ≤ 255 → ordinary X keybindings.** The softkeys *do* work this way,
+   but not at the keycodes you would derive from the kernel: `xmodmap` reports
+   `keycode 135 = Menu` (left softkey) and `keycode 166 = XF86Back` (right).
+   Hence `is_left_softkey()` in `dwm.c` tests `XK_Menu || XF86XK_KbdLcdMenu1 ||
+   keycode == 135`.
+2. **Raw evdev read inside dwm.** `dwm` opens `/dev/input/event0..3` itself
+   (verify with `/proc/<pid>/fd`) and reads `struct input_event` in its main
+   loop at `dwm.c:3305`, matching on **kernel** codes. This bypasses the ceiling
+   entirely and is the only route for the four keys above.
+3. **Neither** — the event is simply lost. This is where the hang-up key sat.
+
+Two chords are already implemented in path 2, both matching kernel codes
+directly, and both work — so **chords are viable on this matrix** despite `*`
+and `#` sharing column 4 with no diodes:
+
+```c
+if (ie.code == 522 || ie.code == 55)       star_down  = (ie.value != 0);
+else if (ie.code == 523 || ie.code == 98)  pound_down = (ie.value != 0);
+```
+
+- **`*` + `#` together → screenshot** (`trigger_starpound_chord`)
+- **both softkeys together → popup menu** (`trigger_softkey_chord`); this is
+  essentially undiscoverable without reading the source
+- timing constants: `SOFTKEY_CHORD_MS` 30, `SOFTKEY_CANCEL_WINDOW_MS` 320
+
+Before binding any keypad key, check which path it takes. Before designing a
+chord, check it is not already taken.
+
+### The suckless build overwrites your config
+
+`scripts/build-sxmo-x11.sh` runs `cp -f config.def.h config.h` before compiling
+**each** of st, dwm and dmenu (lines ~82/92/105). Editing `config.h` is silently
+discarded: the build still exits 0 and produces fresh binaries with new
+timestamps containing **none** of your changes.
+
+**Edit `config.def.h`.** And verify the result is in the artefact rather than
+trusting the exit code:
+
+```sh
+strings overlay/rootfs/usr/bin/st  | grep -c 'pixelsize=16'
+strings overlay/rootfs/usr/bin/dwm | grep -c 'hangupbutton'
+```
+
+Note `overlay/rootfs/usr/bin/dmenu` is a 10-byte **symlink** to `dwm-plugin`,
+not a binary — do not read its size as a failed build.
+
+### Installing over a running binary
+
+`st`, `dwm` and `fcitx5`'s `t9.so` are all live while you replace them.
+Rewriting a mapped file in place (`cp`, `install`) can hand the running process
+a `SIGBUS`. Copy to a temp name on the same filesystem and `mv -f` instead; the
+old inode stays alive until restart, which `/proc/<pid>/maps` shows as
+`(deleted)`. Confirm an install actually took effect by comparing inodes:
+
+```sh
+stat -c %i /usr/lib/fcitx5/t9.so
+awk '/t9\.so/{print $5; exit}' /proc/$(pgrep -x fcitx5)/maps
+```
+
+Equal inodes and no `(deleted)` means the new file is the one running.
+
+Applying X-level changes needs `rc-service tinydm restart`, which closes the
+whole session. `fcitx5` survives it (`superctl` owns that one separately), so
+input-method state persists across an X restart.
+
+### No modifier keys
+
+The keypad produces **no Alt, Ctrl or Shift**. Every dwm binding using
+`MODKEY` (`Mod1Mask`, i.e. Alt) — window switching, `killclient`, tag
+switching — is unreachable from the keypad. `fcitx5-t9`'s `Ctl` mode synthesises
+plain `Ctrl` plus a fixed list of keys, never `Ctrl+Shift`, which is why st's
+stock `TERMMOD` zoom bindings (`Ctrl+Shift+PageUp/Down`) cannot be produced and
+plain-`ControlMask` alternatives have to be added.
+
 ### Keypad matrix map (decoded from the DTS, confirmed by the kernel)
 
 23 keys. Decoded from `linux,keymap` (`MATRIX_KEY(row,col,code)` packed as
@@ -478,10 +572,10 @@ r3: DOWN       BACKSPACE  RIGHT  ENTER  UP
 Three consequences:
 
 - **The two softkeys emit `KEY_KBD_LCD_MENU1` (696) and `KEY_KBD_LCD_MENU2`
-  (697)** — codes meant for keyboards with an integrated LCD, which neither X
-  nor fcitx5 interprets. This is the real explanation for apparent "ghost
-  keypresses": a physical key firing a keycode nobody listens to, not switch
-  bounce. Remapping them in the DTS (e.g. to `KEY_F1`/`KEY_F2`) is the fix.
+  (697).** These are *not* dead codes: dwm binds them (left → system menu,
+  right → app menu) and reaches them via X keycodes 135/166, plus its own raw
+  evdev read. Apparent "ghost keypresses" were these softkeys firing real
+  actions, not switch bounce — see the routing section above.
 - **`KEY_TAB` (15) does not exist anywhere in the matrix.** Shell completion
   therefore requires generating Tab from the `Ctl` mode of `fcitx5-t9`.
 - **`KEY_HANGUP_PHONE` (446) exists**, so binding a long-press to close the

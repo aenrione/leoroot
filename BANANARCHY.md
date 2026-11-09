@@ -246,7 +246,15 @@ ssh user@<hostname>.local
 ```
 
 Note the hostname is `nokia-argon` on every device regardless of target, so
-rename it if you run more than one.
+rename it if you run more than one. Remember to restart avahi afterwards or
+mDNS keeps advertising the old name:
+
+```sh
+echo nokia-leo > /etc/hostname
+sed -i 's/nokia-argon/nokia-leo/g' /etc/hosts
+hostname nokia-leo
+rc-service avahi-daemon restart
+```
 
 The initramfs debug shell is a full root shell and exposes a 32 MB logs disk over
 USB mass storage containing `dmesg.txt`, `blkid.txt` and the live `fdt.dtb` —

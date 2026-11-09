@@ -462,14 +462,46 @@ reports the physical matrix cell and distinguishes a mis-mapped key from genuine
 row/column crosstalk. Suspected "ghost" keypresses are worth measuring before
 assuming debounce.
 
+### Keypad matrix map (decoded from the DTS, confirmed by the kernel)
+
+23 keys. Decoded from `linux,keymap` (`MATRIX_KEY(row,col,code)` packed as
+`(row<<24)|(col<<16)|code`) and independently corroborated against the symbolic
+names the kernel reports for `/dev/input/event3`:
+
+```
+r0: KBD_LCD_MENU1    1    4    7    NUMERIC_STAR     PICKUP_PHONE
+r1: MENU             2    5    8    0                HANGUP_PHONE
+r2: LEFT             3    6    9    NUMERIC_POUND    KBD_LCD_MENU2
+r3: DOWN       BACKSPACE  RIGHT  ENTER  UP
+```
+
+Three consequences:
+
+- **The two softkeys emit `KEY_KBD_LCD_MENU1` (696) and `KEY_KBD_LCD_MENU2`
+  (697)** — codes meant for keyboards with an integrated LCD, which neither X
+  nor fcitx5 interprets. This is the real explanation for apparent "ghost
+  keypresses": a physical key firing a keycode nobody listens to, not switch
+  bounce. Remapping them in the DTS (e.g. to `KEY_F1`/`KEY_F2`) is the fix.
+- **`KEY_TAB` (15) does not exist anywhere in the matrix.** Shell completion
+  therefore requires generating Tab from the `Ctl` mode of `fcitx5-t9`.
+- **`KEY_HANGUP_PHONE` (446) exists**, so binding a long-press to close the
+  focused window is possible — but it belongs in dwm/Sxmo (window management),
+  not in `fcitx5-t9` (text input). Sxmo already has the long-press pattern for
+  the power button.
+
+`KEY_BACKSPACE` is a real physical key (r3c1), so input methods do not need to
+synthesise deletion.
+
 ### Status bar
 
 `fcitx5-t9` writes its badge to `$XDG_RUNTIME_DIR/sxmo_t9_mode` *and*
 `sxmo_status/default/005-input-method`, then concatenates every file in that
 directory (sorted by name) and pushes the result to the X root window via
 `XStoreName`, dlopening `libX11.so.6` at runtime. That root-window name is what
-dwm paints. Known open bug: the badge does not refresh in `st`, although the
-mode itself changes correctly.
+dwm paints. Intermittent: the badge was once observed not refreshing in `st` while the
+mode itself changed correctly, but it refreshed normally afterwards. Possibly
+stale fcitx5 state cleared by a restart — unconfirmed, so treat as flaky
+rather than fixed.
 
 ## Known issues / next steps
 

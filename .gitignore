@@ -1,0 +1,6 @@
+build/
+ota/
+__pycache__/
+*.pyc
+.DS_Store
+keys/testkey-aosp/testkey_priv_nocrypt.pem

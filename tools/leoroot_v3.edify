@@ -1,0 +1,17 @@
+ui_print("LEO root v3: v2 boot + adbd privilege-drop patch");
+mount("ext4", "EMMC", "/dev/block/bootdevice/by-name/system", "/system");
+ui_print("system mounted: ", is_mounted("/system"));
+mount("vfat", "EMMC", "/dev/block/mmcblk1p1", "/sdcard") ||
+       ui_print("card mount err (maybe already mounted)");
+ui_print("card mounted: ", is_mounted("/sdcard"));
+ui_print("backup->card: ", run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/boot", "of=/sdcard/boot-prev-v2-card.img", "bs=4096"));
+ifelse(sha1_check(package_extract_file("boot.img"), "5c4f14c069df45d3ae658b00907a6eae3531731d") == "5c4f14c069df45d3ae658b00907a6eae3531731d",
+       ui_print("extract sha verified - writing boot"),
+       abort("extracted image hash mismatch - NOT flashing"));
+package_extract_file("boot.img", "/dev/block/bootdevice/by-name/boot");
+ui_print("boot written");
+run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/boot", "of=/tmp/bootcheck.img", "bs=4096");
+run_program("/system/bin/md5sum", "/tmp/bootcheck.img");
+ui_print("expected md5: 1b1ed420d4f1e07810619c0525ecbb45 (must equal the line above)");
+run_program("/system/bin/dd", "if=/tmp/recovery.log", "of=/sdcard/log.txt", "bs=4096");
+ui_print("LEO root v3 done - compare the two md5 lines above");

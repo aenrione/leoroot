@@ -1,0 +1,19 @@
+ui_print("LEO recover v4");
+mount("ext4", "EMMC", "/dev/block/bootdevice/by-name/system", "/system");
+ui_print("system mounted: ", is_mounted("/system"));
+mount("vfat", "EMMC", "/dev/block/mmcblk1p1", "/sdcard") ||
+       ui_print("card mount err (maybe already mounted)");
+ui_print("card mounted: ", is_mounted("/sdcard"));
+run_program("/system/bin/chmod", "666", "/tmp/recovery.log");
+run_program("/system/bin/dd", "if=/tmp/recovery.log", "of=/sdcard/log.txt", "bs=4096");
+run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/recovery", "of=/tmp/recovery.img", "bs=1024");
+run_program("/system/bin/chmod", "666", "/tmp/recovery.img");
+run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/boot", "of=/tmp/boot.img", "bs=1024");
+run_program("/system/bin/chmod", "666", "/tmp/boot.img");
+ui_print("tmp dumps done");
+run_program("/system/bin/dd", "if=/proc/partitions", "of=/sdcard/rcanary.txt", "bs=512");
+run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/boot", "of=/sdcard/boot.img", "bs=4096");
+run_program("/system/bin/dd", "if=/dev/block/bootdevice/by-name/recovery", "of=/sdcard/recovery.img", "bs=4096");
+run_program("/system/bin/md5sum", "/tmp/boot.img");
+run_program("/system/bin/md5sum", "/tmp/recovery.img");
+ui_print("LEO recover v4 complete");

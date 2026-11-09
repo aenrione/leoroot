@@ -556,6 +556,66 @@ plain `Ctrl` plus a fixed list of keys, never `Ctrl+Shift`, which is why st's
 stock `TERMMOD` zoom bindings (`Ctrl+Shift+PageUp/Down`) cannot be produced and
 plain-`ControlMask` alternatives have to be added.
 
+### Which physical button is which (measured, not inferred)
+
+Confirmed by pressing each button with `evtest /dev/input/event3` capturing.
+The matrix map alone does **not** tell you physical position, and guessing from
+matrix row/column is wrong:
+
+| physical button | kernel code | reaches X as | bound to |
+| --- | --- | --- | --- |
+| top-right | 697 `KEY_KBD_LCD_MENU2` | `XF86Back` | **app menu** |
+| top-left | 696 `KEY_KBD_LCD_MENU1` | `XK_Menu` (keycode 135) | system menu |
+| above the call key | 139 `KEY_MENU` | `XF86MenuKB` (147) | **nothing** |
+| above the hang-up key | 14 `KEY_BACKSPACE` | BackSpace | delete |
+
+The X input driver is patched to rewrite the high codes into the reachable
+range — `patches/xlibre/0002-xf86-input-libinput-xlibre25.patch`:
+
+```c
+case 696: /* KBD_LCD_MENU1 (Left Softkey)  */ key = KEY_COMPOSE;
+case 697: /* KBD_LCD_MENU2 (Right Softkey) */ key = KEY_BACK;
+case 445: /* KEY_PICKUP_PHONE              */ key = KEY_PHONE;
+case 352: /* KEY_OK (centre D-pad)         */ key = KEY_ENTER;
+```
+
+That rewrite is how four keys above X's 255 ceiling become usable at all, and
+it is why `config.def.h` bindings on `XF86XK_KbdLcdMenu1/2` are dead: those keys
+never arrive under those keysyms. `KEY_MENU` (139) is **not** rewritten and
+**not** bound, which is why that button appears to do nothing.
+
+A quick identification script, since the mapping is not guessable:
+
+```sh
+sudo evtest /dev/input/event3 2>/dev/null \
+  | sed -n 's/.*code \([0-9]*\) (\([A-Z_0-9]*\)).*value 1$/PRESS code \1 \2/p'
+```
+
+### Reaching dwm actions without modifier keys
+
+The keypad has no Alt/Ctrl/Shift, so every `MODKEY` binding (`Mod4Mask`) is
+unreachable. The workable approach is **not** to intercept keys in the evdev
+loop — it is to lean on X's passive grab:
+
+`config.def.h` binding a key with modifier `0` makes `grabkeys()` install a
+passive grab on that keycode. While the key is physically held, the X server
+promotes it to an *active* grab, so every other key is delivered to
+`keypress()` rather than to the focused client, and the grab ends on release.
+Those keys were already being dropped on the floor; a "hold as modifier" layer
+only gives them meaning. Release tracking, suppression and the missed-release
+case are the server's problem, not application state — so there is no flag that
+can wedge the layer on.
+
+Read the held state back with `XQueryKeymap` rather than tracking it yourself
+(the existing two-softkey chord already does this). Note the evdev loop
+*cannot* suppress anything: it is a passive second reader and libinput has
+already delivered the event.
+
+One trap: keys here have X autorepeat on, so **holding** a bound softkey
+re-fires its action every ~40 ms. Disable it per-key with
+`XChangeKeyboardControl(KBKey|KBAutoRepeatMode, …)`; `xset q`'s auto-repeat
+bitmap is how you verify it took effect, and `xset r <code>` restores it live.
+
 ### Keypad matrix map (decoded from the DTS, confirmed by the kernel)
 
 23 keys. Decoded from `linux,keymap` (`MATRIX_KEY(row,col,code)` packed as
@@ -571,11 +631,12 @@ r3: DOWN       BACKSPACE  RIGHT  ENTER  UP
 
 Three consequences:
 
-- **The two softkeys emit `KEY_KBD_LCD_MENU1` (696) and `KEY_KBD_LCD_MENU2`
-  (697).** These are *not* dead codes: dwm binds them (left → system menu,
-  right → app menu) and reaches them via X keycodes 135/166, plus its own raw
-  evdev read. Apparent "ghost keypresses" were these softkeys firing real
-  actions, not switch bounce — see the routing section above.
+- **The two softkeys emit `KEY_KBD_LCD_MENU1` (696, top-left → system menu)
+  and `KEY_KBD_LCD_MENU2` (697, top-right → app menu).** They are not dead
+  codes; the X driver rewrites them into the reachable keycode range. Apparent
+  "ghost keypresses" were these softkeys firing real actions, not switch
+  bounce. See the physical-button table above — matrix position does not
+  indicate physical position.
 - **`KEY_TAB` (15) does not exist anywhere in the matrix.** Shell completion
   therefore requires generating Tab from the `Ctl` mode of `fcitx5-t9`.
 - **`KEY_HANGUP_PHONE` (446) exists**, so binding a long-press to close the

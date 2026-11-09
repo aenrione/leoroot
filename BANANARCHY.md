@@ -210,7 +210,9 @@ Ping alone proves nothing: the kernel answers ICMP for a configured interface
 regardless of whether userspace is alive.
 
 ```sh
-ssh user@172.16.42.1        # password 147147 (also the on-screen passcode)
+ssh user@172.16.42.1        # build default password: 147147
+                            # same value unlocks the on-screen passcode;
+                            # change it via Sxmo Config -> Passcode
 ```
 
 For key auth, `chmod g-w /home/user` first — the build leaves it group-writable
@@ -220,12 +222,95 @@ The initramfs debug shell is a full root shell and exposes a 32 MB logs disk ove
 USB mass storage containing `dmesg.txt`, `blkid.txt` and the live `fdt.dtb` —
 invaluable for confirming what device tree actually booted.
 
+## Fix 3 — WiFi and modem firmware (both remoteprocs)
+
+**Symptom:** WiFi scans return 0 networks, there is no `wlan0` at all, and
+`mmcli -L` reports no modems. `wcn36xx` is not loaded — only `qcom_wcnss_pil`.
+
+```
+$ cat /sys/class/remoteproc/remoteproc*/state
+offline
+offline
+```
+
+**Cause:** Bananarchy's overlay ships only the Adreno and panel blobs
+(`/lib/firmware/qcom/` contains just `a300_pfp.fw` and `a300_pm4.fw`). The
+proprietary Qualcomm firmware is not packaged and nothing mounts the device's
+firmware partition, so neither remote processor has anything to load. One
+missing-firmware problem kills WiFi *and* the modem.
+
+Note the numbering is the opposite of what the addresses suggest:
+
+| node | address | subsystem |
+| --- | --- | --- |
+| `remoteproc0` | `4080000` | MSS (modem) — wants `mba.mbn` |
+| `remoteproc1` | `a204000` | WCNSS (WiFi/BT) — wants `wcnss.mdt` |
+
+**Fix.** The blobs are on the phone's own partitions. As root on the booted
+system (`SUDO_ASKPASS` works non-interactively; `sudo -S` does not):
+
+```sh
+printf '#!/bin/sh\necho <passcode>\n' > /tmp/ap.sh && chmod +x /tmp/ap.sh
+export SUDO_ASKPASS=/tmp/ap.sh    # then: sudo -A <cmd>
+
+# 1. vendor firmware from the `modem` partition (KaiOS /firmware)
+mount -o ro /dev/mmcblk0p25 /mnt/fw          # PARTLABEL=modem
+mkdir -p /lib/firmware/qcom
+cp -a /mnt/fw/image/wcnss.* /mnt/fw/image/mba.mbn /mnt/fw/image/modem.* /lib/firmware/qcom/
+
+# 2. the kernel requests `mba.mbn`, NOT `qcom/mba.mbn`
+cd /lib/firmware && for f in qcom/wcnss.* qcom/mba.mbn qcom/modem.*; do
+  ln -sf "$f" ./$(basename "$f")
+done
+
+# 3. WiFi calibration from `persist` -- the per-unit factory blob,
+#    preferred over the generic copy in /system/etc/firmware/
+mount -o ro /dev/mmcblk0p31 /mnt/px          # PARTLABEL=persist
+mkdir -p /lib/firmware/wlan/prima
+cp /mnt/px/WCNSS_qcom_wlan_nv.bin /mnt/px/WCNSS_wlan_dictionary.dat /lib/firmware/wlan/prima/
+
+# 4. start them (or just reboot -- the kernel auto-starts both at ~t+16s
+#    once the files exist)
+echo start > /sys/class/remoteproc/remoteproc1/state   # WCNSS
+echo start > /sys/class/remoteproc/remoteproc0/state   # modem
+```
+
+Success looks like this:
+
+```
+remoteproc1: Booting fw image wcnss.mdt -> is now up
+wcn36xx: firmware WLAN version 'WCN v2.0 RadioPhy ... 19.2MHz XO' CRM '00261'
+wcn36xx: firmware API 1.5.1.2, 41 stations, 2 bssids
+remoteproc0: Booting fw image mba.mbn -> MBA booted, loading mpss -> is now up
+```
+
+Partition numbers here are for a TA-1324; resolve them by label rather than
+copying the numbers:
+
+```sh
+for p in /dev/mmcblk0p*; do printf '%s %s\n' "$p" "$(blkid -o value -s PARTLABEL $p)"; done
+```
+
+The firmware lives on the SD rootfs, so this persists across reboots. `rmtfs`
+must be running (it is, by default) — it serves the modem's NV store from
+`modemst1`/`modemst2`/`fsg`/`fsc`.
+
+Then connect normally, on the phone via Sxmo's `xnetworks` or from a shell:
+
+```sh
+nmcli device wifi connect "<SSID>" password "<password>"
+```
+
+**`wcn36xx` on this chip is 2.4 GHz only** — channels 1/6/11. A 5 GHz-only SSID
+will never appear in a scan; that is the hardware, not a bug.
+
 ## Known issues / next steps
 
 - **No cellular voice.** Bananarchy does circuit-switched voice only
   (`ModemManager` + `q6voiced`); there is no VoLTE/IMS. On networks that have
   retired 2G/3G this means no carrier calls. See the VoLTE notes below.
-- **`mmcli -L` reports no modems** on first boot — not yet investigated.
+- **WiFi and the modem need vendor firmware installed by hand** (see Fix 3);
+  out of the box both remote processors stay offline.
 - **Hostname is `nokia-argon`** regardless of target device; cosmetic.
 - `broken-cd` polls the slot at 1 Hz, costing a little idle power.
 

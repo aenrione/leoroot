@@ -10,6 +10,9 @@ card runs **arbitrary edify as root** through "Apply update from SD card".
 Result: `uid=0 gid=0` adb shell, full capability set, SELinux permissive,
 persistent across reboots.
 
+Once rooted, [`BANANARCHY.md`](BANANARCHY.md) covers dual-booting **Bananarchy
+Linux** (Alpine/postmarketOS) from a microSD with KaiOS left intact.
+
 ## Safety
 
 - For TA-1324 US only (`hw.name=leous`, `securityfused=true`, build 12.00.17.01).

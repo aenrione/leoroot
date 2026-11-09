@@ -58,6 +58,23 @@ recreate by hand. `switch_root` then execs a nonexistent `/sbin/init` and dies:
 kernel alive, zero userspace, console frozen on the initramfs's last message.
 Fix is below.
 
+The same flag also skips **package user/group creation**, which bites later and
+less obviously. `avahi-daemon`, for example, fails with `Failed to find user
+'avahi'`. Create the account by hand, then reload D-Bus so its policy can
+resolve the now-existing user (do **not** restart D-Bus — that kills the Sxmo
+session):
+
+```sh
+addgroup -S -g 86 avahi
+adduser -S -D -H -h /dev/null -s /sbin/nologin -G avahi -g avahi -u 86 avahi
+dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
+          org.freedesktop.DBus.ReloadConfig
+rc-service avahi-daemon start && rc-update add avahi-daemon default
+```
+
+Expect other services to need the same treatment; symptoms are always a
+missing user or group rather than anything that looks like a packaging bug.
+
 ## Build
 
 Must run on x86_64 Linux with a **native filesystem**. Building on macOS fails:
@@ -217,6 +234,19 @@ ssh user@172.16.42.1        # build default password: 147147
 
 For key auth, `chmod g-w /home/user` first — the build leaves it group-writable
 and OpenSSH's `StrictModes` silently refuses `authorized_keys`.
+
+Once WiFi works (Fix 3), prefer the LAN. The DHCP address moves and
+`wcn36xx` here hands out a **locally-administered, non-persistent MAC** (the
+NV blob does not supply one), so router reservations are unreliable. Start
+`avahi-daemon` instead and reach the phone by name — macOS and most Linux
+desktops resolve `.local` natively:
+
+```sh
+ssh user@<hostname>.local
+```
+
+Note the hostname is `nokia-argon` on every device regardless of target, so
+rename it if you run more than one.
 
 The initramfs debug shell is a full root shell and exposes a 32 MB logs disk over
 USB mass storage containing `dmesg.txt`, `blkid.txt` and the live `fdt.dtb` —

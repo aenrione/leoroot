@@ -81,7 +81,7 @@ Note `rebuild-image.sh` **`exec`s** into `docker run`, so `pgrep -f
 rebuild-image.sh` stops matching while the build is still running. Wait on the
 container, not the script name.
 
-## Fix 1 — SD card detection (DTB)
+## Fix 1 (pre-boot, on the card) — SD card detection (DTB)
 
 **Symptom:** the initramfs prints `ERROR: failed to mount subpartitions!` and
 drops to its debug shell. `ls /dev/mmcblk1*` finds nothing; `dmesg` shows `mmc1:
@@ -109,7 +109,7 @@ A cleaner long-term fix would be finding leo's real CD pin, or flipping the
 polarity to active-high; `broken-cd` trades interrupt-driven detection for a
 1 Hz poll.
 
-## Fix 2 — restore the busybox applet symlinks
+## Fix 2 (pre-boot, on the card) — restore the busybox applet symlinks
 
 Without this the system cannot boot (bug 3 above). Mount `pmOS_root` on the
 build host and recreate every applet symlink that is missing, never overwriting
@@ -222,7 +222,7 @@ The initramfs debug shell is a full root shell and exposes a 32 MB logs disk ove
 USB mass storage containing `dmesg.txt`, `blkid.txt` and the live `fdt.dtb` —
 invaluable for confirming what device tree actually booted.
 
-## Fix 3 — WiFi and modem firmware (both remoteprocs)
+## Fix 3 (after first boot) — WiFi and modem firmware
 
 **Symptom:** WiFi scans return 0 networks, there is no `wlan0` at all, and
 `mmcli -L` reports no modems. `wcn36xx` is not loaded — only `qcom_wcnss_pil`.
